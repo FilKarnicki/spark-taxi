@@ -142,8 +142,32 @@ object Taxi {
         .show
     }
 
+    def whatAreTopPickupDropoffPoints = {
+      def popularPickupWithDropoffZones(dataset: Dataset[Trip]): DataFrame = {
+        dataset
+          .groupByKey(trip => (trip.PULocationID, trip.DOLocationID))
+          .mapGroups((pickupWithDropoff, trips) => (pickupWithDropoff, trips) match {
+            case ((pickup: Int, dropOff: Int), trip: Iterator[Trip]) =>
+              (pickup, dropOff, trip.size)
+          })
+          .join(taxiZones, col("_1") === taxiZones.col("LocationID").as("pickup"))
+          .withColumnRenamed("zone", "pickupZone")
+          .drop("LocationID")
+          .join(taxiZones, col("_2") === taxiZones.col("LocationID"))
+          .withColumnRenamed("zone", "dropoffZone")
+          .orderBy(col("_3").desc_nulls_last)
+          .select(col("pickupZone"), col("dropoffZone"), col("_3").as("count"))
+      }
+
+      popularPickupWithDropoffZones(taxi.filter(_.trip_distance >= 30))
+        .show // airport transfers?
+      popularPickupWithDropoffZones(taxi.filter(_.trip_distance < 30))
+        .show // affluent areas?
+    }
+
     whichBoroughsHaveTheMostPickupsOverall
     whatAreThePeakHours
     howAreTheTripsDistributedWithRegardsToLengthThreshold
+    whatAreTopPickupDropoffPoints
   }
 }
