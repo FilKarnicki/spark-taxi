@@ -41,6 +41,16 @@ object Taxi {
       dataset.filter(col("isLong") === false)
   }
 
+  implicit class LocalDateTimeBucketingOps(dt: LocalDateTime) {
+    def bucketByMins(mins: Int): LocalDateTime = {
+      val minutesAfterHour = (dt.getMinute / mins).floor.toInt * mins
+      LocalDateTime
+        .from(dt)
+        .withMinute(minutesAfterHour)
+        .withSecond(0)
+    }
+  }
+
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .config("spark.master", "local")
@@ -119,7 +129,7 @@ object Taxi {
           stddev(col("distance").as("stddev")),
           functions.min(col("distance").as("min")),
           functions.max(col("distance").as("max")))
-          .show
+        .show
 
       taxi
         .withIsLong
@@ -165,9 +175,86 @@ object Taxi {
         .show // affluent areas?
     }
 
+    def howArePeoplePayingForTheRides = {
+      taxi
+        .groupByKey(_.RatecodeID)
+        .mapGroups((k, v) => (k, v.size))
+        .orderBy(col("_2").desc_nulls_last)
+        .show
+    }
+
+    def whatAreTheTrendsInPaymentTypes = {
+      // this time with DF
+      taxi
+        .toDF
+        .groupBy(col("payment_type"), (to_date(col("tpep_pickup_datetime")).as("date")))
+        .agg(count("*").as("total_trips"))
+        // below would be correct for Dataset
+        //.groupByKey(trip => (trip.RatecodeID, trip.tpep_pickup_datetime.getHour))
+        //.mapGroups((k, v) => (k, v.size))
+        .orderBy(col("payment_type"), col("date").desc_nulls_last)
+        .show
+    }
+
+    def exploringRideshareForShortTripsCloseTogether = {
+      val bucketedTrips =
+        taxi
+          .filter(_.passenger_count < 3)
+          .groupByKey(trip =>
+            (trip.PULocationID, trip.tpep_pickup_datetime.bucketByMins(5)))
+          .mapGroups((pickupIdWithDateTime, trips) => {
+            val tripList = trips.toList
+            (pickupIdWithDateTime._1, pickupIdWithDateTime._2, tripList.length, tripList.map(_.total_amount).sum)
+          })
+          // Annoyingly this below doesn't compile
+          //        .mapGroups[(Int, LocalDateTime, Int, Double)]{
+          //          case ((pickupId: Int, pickupDateTime: LocalDateTime), trips: Iterator[Trip]) =>
+          //            (pickupId, pickupDateTime, trips.size, trips.map(_.total_amount).sum)
+          //        }
+          .withColumnsRenamed(Map(
+            "_1" -> "pickup_location_id",
+            "_2" -> "pickup_time_bucket",
+            "_3" -> "number_of_trips",
+            "_4" -> "total_amount",
+          ))
+          .join(taxiZones, col("pickup_location_id") === col("LocationID"))
+          .drop("LocationID", "service_zone")
+          .orderBy(col("total_amount").desc_nulls_last)
+
+      bucketedTrips.show() // ride sharing makes sense from the airports / should build rapid transport system
+
+      // Proposal:
+      // 1. 5% of taxi trips are groupable
+      // 2. 30% of people will accept to be grouped
+      // 3. $5 discount to those who accept
+      // 4. $2 extra to those who don't
+      // 5. costs to the company of grouped rides are -60% (staff, fuel, maintenance, etc)
+
+      val percentGroupAccept = 0.3
+      val discountForAccept = 5
+      val penaltyForRefuse = 2
+      val averageOperatorCostReduction: Double = 0.6 * taxi.select(avg(col("total_amount"))).as[Double].take(1).head
+
+      val economicImpact = bucketedTrips
+        .withColumn("groupedRides",
+          col("number_of_trips") * percentGroupAccept)
+        .withColumn("acceptedGroupedRidesEconomicImpact",
+          col("groupedRides") * percentGroupAccept * (averageOperatorCostReduction - discountForAccept))
+        .withColumn("rejectedGroupedRidesEconomicImpact",
+          col("groupedRides") * (1 - percentGroupAccept) * penaltyForRefuse)
+        .withColumn("totalEconomicImpact",
+          col("acceptedGroupedRidesEconomicImpact") + col("rejectedGroupedRidesEconomicImpact"))
+
+      economicImpact.show
+      economicImpact.select(sum(col("totalEconomicImpact"))).show
+    }
+
     whichBoroughsHaveTheMostPickupsOverall
     whatAreThePeakHours
     howAreTheTripsDistributedWithRegardsToLengthThreshold
     whatAreTopPickupDropoffPoints
+    howArePeoplePayingForTheRides
+    whatAreTheTrendsInPaymentTypes
+    exploringRideshareForShortTripsCloseTogether
   }
 }

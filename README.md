@@ -2,10 +2,11 @@
 ## questions
 1. Which zones/boroughs have the most pickups overall?
 1. What are the peak hours?
-1. How are the trips distributed
-1. What are the top 3 pickup dropoff zones for long/short trips
-1. How are the people paying for long/short trips
-1. Can we explore ridesharing by grouping trips together?
+1. How are the trips distributed?
+1. What are the top 3 pickup dropoff zones for long/short trips?
+1. How are the people paying for the trips?
+1. What are the trends in payment types?
+1. Can we explore ridesharing by grouping close trips together?
 
 ## running
 `sbt assembly`
