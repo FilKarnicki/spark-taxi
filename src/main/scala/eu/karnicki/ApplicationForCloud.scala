@@ -7,6 +7,8 @@ import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructT
 
 object ApplicationForCloud {
   def main(args: Array[String]): Unit = {
+    val inputPath = args.head
+    val outputDestination = args(1)
     val spark = SparkSession.builder()
       .config("spark.master", "local")
       .appName("Taxi analysis")
@@ -14,9 +16,10 @@ object ApplicationForCloud {
     import spark.implicits._
 
     val taxi = spark.read
-      .load("src/main/resources/data/yellow_taxi_jan_25_2018")
-    //.load("src/main/resources/data/NYC_taxi_2009-2016.parquet")
-    //.load(args.head)
+      //.load("src/main/resources/data/yellow_taxi_jan_25_2018")
+      //.load("src/main/resources/data/NYC_taxi_2009-2016.parquet")
+      .load(inputPath)
+    taxi.printSchema
 
     val taxiZones = spark.read
       .option("header", "true")
@@ -36,18 +39,17 @@ object ApplicationForCloud {
 
     val economicImpact =
       taxi
-        .filter(col("passenger_count") < 3)
         .select(
-          round(unix_timestamp(col("tpep_pickup_datetime")) / 300).cast("integer").as("fiveMinId"),
-          col("PULocationID"),
+          round(unix_timestamp(col("pickup_datetime")) / 300).cast("integer").as("fiveMinId"),
+          col("pickup_taxizone_id"),
           col("total_amount"))
-        .groupBy(col("PULocationID"), col("fiveMinId"))
+        .groupBy(col("pickup_taxizone_id"), col("fiveMinId"))
         .agg(
           count("*").as("total_trips"),
           sum("total_amount").as("total_amount"))
         .withColumn("time_bucket", from_unixtime(col("fiveMinId") * 300))
         .drop("fiveMinId")
-        .join(taxiZones, col("PULocationID") === col("LocationID"))
+        .join(taxiZones, col("pickup_taxizone_id") === col("LocationID"))
         .drop("LocationID", "service_zone")
         .orderBy(col("total_amount").desc_nulls_last)
         .withColumn("groupedRides", col("total_trips") * percentGroupAttempt)
@@ -56,7 +58,7 @@ object ApplicationForCloud {
         .withColumn("totalImpact", col("acceptedGroupedRidesEconomicImpact") + col("rejectedGroupedRidesEconomicImpact"))
         .orderBy(col("totalImpact").desc_nulls_last)
 
-    economicImpact.show
+    economicImpact.write.option("header", "true").csv(outputDestination)
     economicImpact.select(sum(col("totalImpact")).as("grand_total")).show
   }
 }
